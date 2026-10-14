@@ -1,7 +1,7 @@
 
 name: Build TiKTWO
 
-on:
+'on':
   workflow_dispatch:
 
 permissions:
@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get repository
+      - name: Download repository
         uses: actions/checkout@v4
 
       - name: Install Flutter
@@ -20,9 +20,12 @@ jobs:
         with:
           channel: stable
 
-      - name: Create Flutter project
+      - name: Create Flutter application
         run: |
           flutter create --project-name tiktwo --org com.tiktwo .
+
+      - name: Create TiKTWO home screen
+        run: |
           cat > lib/main.dart <<'DART'
           import 'package:flutter/material.dart';
 
@@ -30,7 +33,7 @@ jobs:
 
           const pink = Color(0xFFFF2D75);
           const purple = Color(0xFF8B5CF6);
-          const bg = Color(0xFF08080D);
+          const background = Color(0xFF09090F);
 
           class TikTwoApp extends StatelessWidget {
             const TikTwoApp({super.key});
@@ -38,96 +41,64 @@ jobs:
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
-                debugShowCheckedModeBanner: false,
                 title: 'TiKTWO',
+                debugShowCheckedModeBanner: false,
                 theme: ThemeData(
                   brightness: Brightness.dark,
-                  scaffoldBackgroundColor: bg,
+                  scaffoldBackgroundColor: background,
                   colorScheme: ColorScheme.fromSeed(
                     seedColor: pink,
                     brightness: Brightness.dark,
                   ),
                   useMaterial3: true,
                 ),
-                home: const HomePage(),
+                home: const FeedPage(),
               );
             }
           }
 
-          class HomePage extends StatefulWidget {
-            const HomePage({super.key});
+          class FeedPage extends StatefulWidget {
+            const FeedPage({super.key});
 
             @override
-            State<HomePage> createState() => _HomePageState();
+            State<FeedPage> createState() => _FeedPageState();
           }
 
-          class _HomePageState extends State<HomePage> {
-            int tab = 0;
-            int video = 0;
-            final liked = <int>{};
-            final following = <int>{};
+          class _FeedPageState extends State<FeedPage> {
+            int videoIndex = 0;
+            int selectedTab = 0;
+            final Set<int> liked = {};
 
-            final creators = [
-              ('Mira', '@mira.vibes', 'يوم جديد، طاقة جديدة ✨'),
-              ('Ali', '@ali.creator', 'عيش اللحظة 💜'),
-              ('Noor', '@noor.daily', 'ابتسم، الحياة حلوة 🌸'),
+            final List<Map<String, String>> videos = [
+              {
+                'name': 'Mira',
+                'user': '@mira.vibes',
+                'caption': 'يوم جديد، طاقة جديدة ✨',
+              },
+              {
+                'name': 'Ali',
+                'user': '@ali.creator',
+                'caption': 'عيش اللحظة 💜',
+              },
+              {
+                'name': 'Noor',
+                'user': '@noor.daily',
+                'caption': 'ابتسم، الحياة حلوة 🌸',
+              },
             ];
 
-            void message(String text) {
+            void notify(String text) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(text),
                   backgroundColor: purple,
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-            }
-
-            void showComments() {
-              showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                backgroundColor: const Color(0xFF171720),
-                builder: (context) => Padding(
-                  padding: EdgeInsets.only(
-                    left: 20,
-                    right: 20,
-                    top: 22,
-                    bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-                  ),
-                  child: SizedBox(
-                    height: 300,
-                    child: Column(
-                      children: [
-                        const Text('التعليقات',
-                            style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 20),
-                        const Text('كن أول من يعلّق على هذا الفيديو 💬'),
-                        const Spacer(),
-                        TextField(
-                          decoration: InputDecoration(
-                            hintText: 'اكتب تعليقاً...',
-                            suffixIcon: IconButton(
-                              icon: const Icon(Icons.send, color: pink),
-                              onPressed: () => Navigator.pop(context),
-                            ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(28),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ),
               );
             }
 
             @override
             Widget build(BuildContext context) {
-              final creator = creators[video % creators.length];
+              final current = videos[videoIndex];
 
               return Scaffold(
                 body: SafeArea(
@@ -135,25 +106,24 @@ jobs:
                     fit: StackFit.expand,
                     children: [
                       GestureDetector(
-                        onVerticalDragEnd: (details) {
+                        onVerticalDragEnd: (_) {
                           setState(() {
-                            video = (video + 1) % creators.length;
+                            videoIndex =
+                                (videoIndex + 1) % videos.length;
                           });
                         },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 400),
+                        child: Container(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
                               colors: [
-                                const Color(0xFF24143E),
-                                video.isEven
-                                    ? const Color(0xFF551A42)
-                                    : const Color(0xFF172B48),
-                                bg,
+                                videoIndex.isEven
+                                    ? const Color(0xFF38164B)
+                                    : const Color(0xFF152E50),
+                                const Color(0xFF17101F),
+                                background,
                               ],
-                              stops: const [0, 0.48, 1],
                             ),
                           ),
                           child: Center(
@@ -161,8 +131,8 @@ jobs:
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Container(
-                                  width: 112,
-                                  height: 112,
+                                  width: 110,
+                                  height: 110,
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
                                     gradient: const LinearGradient(
@@ -170,40 +140,39 @@ jobs:
                                     ),
                                     boxShadow: [
                                       BoxShadow(
-                                        color: pink.withValues(alpha: 0.3),
-                                        blurRadius: 40,
+                                        color: pink.withAlpha(90),
+                                        blurRadius: 35,
                                       ),
                                     ],
                                   ),
                                   child: const Icon(
                                     Icons.play_arrow_rounded,
-                                    size: 76,
+                                    size: 78,
                                     color: Colors.white,
                                   ),
                                 ),
-                                const SizedBox(height: 24),
+                                const SizedBox(height: 22),
                                 const Text(
                                   'TiKTWO',
                                   style: TextStyle(
-                                    fontSize: 34,
+                                    fontSize: 35,
                                     fontWeight: FontWeight.w900,
                                     letterSpacing: 3,
                                   ),
                                 ),
-                                const SizedBox(height: 10),
+                                const SizedBox(height: 8),
                                 const Text(
                                   'كل لحظة إلها قصة',
                                   style: TextStyle(
                                     color: Colors.white70,
-                                    fontSize: 16,
+                                    fontSize: 17,
                                   ),
                                 ),
-                                const SizedBox(height: 20),
+                                const SizedBox(height: 22),
                                 const Text(
-                                  'اسحب للأعلى لاستكشاف المزيد',
+                                  'اسحب للأعلى للتنقل',
                                   style: TextStyle(
                                     color: Colors.white54,
-                                    fontSize: 12,
                                   ),
                                 ),
                               ],
@@ -213,7 +182,7 @@ jobs:
                       ),
 
                       Positioned(
-                        top: 12,
+                        top: 15,
                         left: 0,
                         right: 0,
                         child: Row(
@@ -221,26 +190,31 @@ jobs:
                           children: [
                             const Text(
                               'أتابع',
-                              style: TextStyle(color: Colors.white60),
+                              style: TextStyle(
+                                color: Colors.white60,
+                              ),
                             ),
-                            const SizedBox(width: 20),
+                            const SizedBox(width: 22),
                             Container(
-                              padding: const EdgeInsets.only(bottom: 7),
+                              padding:
+                                  const EdgeInsets.only(bottom: 7),
                               decoration: const BoxDecoration(
                                 border: Border(
                                   bottom: BorderSide(
-                                      color: pink, width: 3),
+                                    color: pink,
+                                    width: 3,
+                                  ),
                                 ),
                               ),
                               child: const Text(
                                 'لك',
                                 style: TextStyle(
-                                  fontSize: 19,
+                                  fontSize: 20,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 20),
+                            const SizedBox(width: 22),
                             const Icon(Icons.search, size: 27),
                           ],
                         ),
@@ -248,103 +222,101 @@ jobs:
 
                       Positioned(
                         right: 12,
-                        bottom: 95,
+                        bottom: 105,
                         child: Column(
                           children: [
-                            Container(
-                              width: 50,
-                              height: 50,
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: LinearGradient(
-                                  colors: [pink, purple],
-                                ),
-                              ),
-                              child: const Icon(
+                            const CircleAvatar(
+                              radius: 25,
+                              backgroundColor: purple,
+                              child: Icon(
                                 Icons.person,
+                                color: Colors.white,
                                 size: 30,
                               ),
                             ),
-                            const SizedBox(height: 20),
-                            actionButton(
-                              icon: liked.contains(video)
+                            const SizedBox(height: 22),
+                            action(
+                              icon: liked.contains(videoIndex)
                                   ? Icons.favorite
                                   : Icons.favorite_border,
-                              label: liked.contains(video) ? '1.1K' : '1K',
-                              color: liked.contains(video)
+                              label: liked.contains(videoIndex)
+                                  ? '1.1K'
+                                  : '1K',
+                              color: liked.contains(videoIndex)
                                   ? pink
                                   : Colors.white,
-                              onTap: () => setState(() {
-                                if (!liked.add(video)) liked.remove(video);
-                              }),
+                              onTap: () {
+                                setState(() {
+                                  if (!liked.add(videoIndex)) {
+                                    liked.remove(videoIndex);
+                                  }
+                                });
+                              },
                             ),
-                            const SizedBox(height: 18),
-                            actionButton(
+                            const SizedBox(height: 20),
+                            action(
                               icon: Icons.mode_comment_outlined,
                               label: 'تعليق',
-                              onTap: showComments,
+                              onTap: () => notify(
+                                'التعليقات الحقيقية نضيفها لاحقاً',
+                              ),
                             ),
-                            const SizedBox(height: 18),
-                            actionButton(
+                            const SizedBox(height: 20),
+                            action(
                               icon: Icons.bookmark_border,
                               label: 'حفظ',
-                              onTap: () => message('ميزة الحفظ قيد التطوير'),
+                              onTap: () => notify(
+                                'ميزة الحفظ نضيفها لاحقاً',
+                              ),
                             ),
-                            const SizedBox(height: 18),
-                            actionButton(
+                            const SizedBox(height: 20),
+                            action(
                               icon: Icons.share_outlined,
                               label: 'مشاركة',
-                              onTap: () => message('ميزة المشاركة قيد التطوير'),
+                              onTap: () => notify(
+                                'ميزة المشاركة نضيفها لاحقاً',
+                              ),
                             ),
                           ],
                         ),
                       ),
 
                       Positioned(
-                        left: 16,
+                        left: 15,
                         right: 82,
-                        bottom: 100,
+                        bottom: 105,
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
                           children: [
                             Text(
-                              creator.$1,
+                              current['name']!,
                               style: const TextStyle(
-                                fontSize: 20,
+                                fontSize: 21,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                            const SizedBox(height: 7),
-                            Text(creator.$2,
-                                style: const TextStyle(color: Colors.white70)),
-                            const SizedBox(height: 9),
-                            Text(creator.$3,
-                                style: const TextStyle(fontSize: 15)),
+                            const SizedBox(height: 5),
+                            Text(
+                              current['user']!,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              current['caption']!,
+                              style: const TextStyle(fontSize: 15),
+                            ),
                             const SizedBox(height: 12),
-                            Row(
+                            const Row(
                               children: [
-                                const Icon(Icons.music_note, size: 17),
-                                const SizedBox(width: 6),
-                                const Expanded(
+                                Icon(Icons.music_note, size: 18),
+                                SizedBox(width: 6),
+                                Expanded(
                                   child: Text(
                                     'الصوت الأصلي - TiKTWO',
                                     overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                TextButton(
-                                  onPressed: () => setState(() {
-                                    if (!following.add(video)) {
-                                      following.remove(video);
-                                    }
-                                  }),
-                                  child: Text(
-                                    following.contains(video)
-                                        ? 'تتابعه ✓'
-                                        : '+ متابعة',
-                                    style: const TextStyle(
-                                      color: pink,
-                                      fontWeight: FontWeight.bold,
-                                    ),
                                   ),
                                 ),
                               ],
@@ -354,31 +326,46 @@ jobs:
                       ),
 
                       Positioned(
-                        bottom: 0,
                         left: 0,
                         right: 0,
+                        bottom: 0,
                         child: Container(
-                          decoration: BoxDecoration(
-                            color: bg.withValues(alpha: 0.96),
-                            border: const Border(
-                              top: BorderSide(color: Colors.white12),
+                          decoration: const BoxDecoration(
+                            color: background,
+                            border: Border(
+                              top: BorderSide(
+                                color: Colors.white12,
+                              ),
                             ),
                           ),
                           child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            mainAxisAlignment:
+                                MainAxisAlignment.spaceAround,
                             children: [
-                              navItem(Icons.home_filled, 'الرئيسية', 0),
-                              navItem(Icons.explore_outlined, 'اكتشف', 1),
+                              nav(
+                                Icons.home_filled,
+                                'الرئيسية',
+                                0,
+                              ),
+                              nav(
+                                Icons.explore_outlined,
+                                'اكتشف',
+                                1,
+                              ),
                               GestureDetector(
-                                onTap: () =>
-                                    message('رفع الفيديوهات نضيفه بالمرحلة القادمة'),
+                                onTap: () => notify(
+                                  'رفع الفيديوهات نضيفه لاحقاً',
+                                ),
                                 child: Container(
-                                  margin: const EdgeInsets.symmetric(
-                                      vertical: 10),
-                                  width: 46,
+                                  margin:
+                                      const EdgeInsets.symmetric(
+                                    vertical: 10,
+                                  ),
+                                  width: 45,
                                   height: 34,
                                   decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(10),
+                                    borderRadius:
+                                        BorderRadius.circular(10),
                                     gradient: const LinearGradient(
                                       colors: [pink, purple],
                                     ),
@@ -389,8 +376,16 @@ jobs:
                                   ),
                                 ),
                               ),
-                              navItem(Icons.inbox_outlined, 'الرسائل', 2),
-                              navItem(Icons.person_outline, 'حسابي', 3),
+                              nav(
+                                Icons.inbox_outlined,
+                                'الرسائل',
+                                2,
+                              ),
+                              nav(
+                                Icons.person_outline,
+                                'حسابي',
+                                3,
+                              ),
                             ],
                           ),
                         ),
@@ -401,7 +396,7 @@ jobs:
               );
             }
 
-            Widget actionButton({
+            Widget action({
               required IconData icon,
               required String label,
               required VoidCallback onTap,
@@ -413,29 +408,39 @@ jobs:
                   children: [
                     Icon(icon, size: 32, color: color),
                     const SizedBox(height: 4),
-                    Text(label,
-                        style: const TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.w600)),
+                    Text(
+                      label,
+                      style: const TextStyle(fontSize: 11),
+                    ),
                   ],
                 ),
               );
             }
 
-            Widget navItem(IconData icon, String label, int index) {
-              final selected = tab == index;
+            Widget nav(
+              IconData icon,
+              String label,
+              int index,
+            ) {
               return GestureDetector(
                 onTap: () {
-                  setState(() => tab = index);
-                  if (index != 0) message('$label — نضيفها بالمرحلة القادمة');
+                  setState(() => selectedTab = index);
+                  if (index != 0) {
+                    notify('$label — نضيفها بالمرحلة القادمة');
+                  }
                 },
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 12,
+                  ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
                         icon,
-                        color: selected ? pink : Colors.white60,
+                        color: selectedTab == index
+                            ? pink
+                            : Colors.white60,
                         size: 25,
                       ),
                       const SizedBox(height: 3),
@@ -443,7 +448,9 @@ jobs:
                         label,
                         style: TextStyle(
                           fontSize: 10,
-                          color: selected ? pink : Colors.white60,
+                          color: selectedTab == index
+                              ? pink
+                              : Colors.white60,
                         ),
                       ),
                     ],
@@ -454,7 +461,11 @@ jobs:
           }
           DART
 
-      - name: Save project files
+      - name: Set Android app name
+        run: |
+          sed -i 's/android:label="[^"]*"/android:label="TiKTWO"/' android/app/src/main/AndroidManifest.xml
+
+      - name: Save Flutter source to repository
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
