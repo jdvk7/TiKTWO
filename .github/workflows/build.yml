@@ -16,13 +16,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download project files
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Check Firebase configuration
+        shell: bash
         run: |
           if [ ! -f google-services.json ]; then
-            echo "ERROR: google-services.json is missing from the repository root."
+            echo "ERROR: google-services.json is missing."
             exit 1
           fi
 
@@ -33,10 +34,10 @@ jobs:
           cache: true
 
       - name: Create Flutter project
-        run: |
-          flutter create --project-name tiktwo --org com.tiktwo .
+        run: flutter create --project-name tiktwo --org com.tiktwo .
 
-      - name: Set Android app name and internet permission
+      - name: Configure Android
+        shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -44,26 +45,41 @@ jobs:
 
           p = Path("android/app/src/main/AndroidManifest.xml")
           s = p.read_text()
+          if "android.permission.INTERNET" not in s:
+              s = s.replace(
+                  "<application",
+                  '<uses-permission android:name="android.permission.INTERNET" />\n    <application',
+                  1
+              )
           s = re.sub(r'android:label="[^"]*"', 'android:label="TiKTWO"', s)
-          if 'android.permission.INTERNET' not in s:
-              s = s.replace('<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ', 1)
-              s = s.replace('<application', '<uses-permission android:name="android.permission.INTERNET" />\n    <application', 1)
           p.write_text(s)
 
-          for name in ("android/app/build.gradle.kts", "android/app/build.gradle"):
-              p = Path(name)
+          for filename in (
+              "android/app/build.gradle.kts",
+              "android/app/build.gradle",
+          ):
+              p = Path(filename)
               if p.exists():
                   s = p.read_text()
-                  s = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = 23', s)
-                  s = re.sub(r'minSdkVersion\s+flutter\.minSdkVersion', 'minSdkVersion 23', s)
+                  s = re.sub(
+                      r'minSdk\s*=\s*flutter\.minSdkVersion',
+                      'minSdk = 23',
+                      s
+                  )
+                  s = re.sub(
+                      r'minSdkVersion\s+flutter\.minSdkVersion',
+                      'minSdkVersion 23',
+                      s
+                  )
                   p.write_text(s)
           PY
 
-      - name: Install app packages
+      - name: Install app dependencies
         run: |
           flutter pub add firebase_core firebase_auth cloud_firestore video_player image_picker
 
-      - name: Configure Firebase from downloaded file
+      - name: Generate Firebase options
+        shell: bash
         run: |
           python3 - <<'PY'
           import json
@@ -71,18 +87,25 @@ jobs:
 
           data = json.loads(Path("google-services.json").read_text())
           info = data["project_info"]
+
           client = next(
-              (c for c in data["client"]
-               if c["client_info"]["android_client_info"]["package_name"] == "com.tiktwo.tiktwo"),
+              (
+                  item for item in data["client"]
+                  if item["client_info"]["android_client_info"]["package_name"]
+                  == "com.tiktwo.tiktwo"
+              ),
               None
           )
+
           if client is None:
-              raise SystemExit("Firebase Android package must be com.tiktwo.tiktwo")
+              raise SystemExit(
+                  "ERROR: Firebase Android package must be com.tiktwo.tiktwo"
+              )
 
           api_key = client["api_key"][0]["current_key"]
           app_id = client["client_info"]["mobilesdk_app_id"]
           project_id = info["project_id"]
-          sender_id = info["project_number"]
+          sender_id = str(info["project_number"])
           bucket = info.get("storage_bucket")
 
           lines = [
@@ -92,16 +115,21 @@ jobs:
               "  static const FirebaseOptions android = FirebaseOptions(",
               f"    apiKey: {json.dumps(api_key)},",
               f"    appId: {json.dumps(app_id)},",
-              f"    messagingSenderId: {json.dumps(str(sender_id))},",
+              f"    messagingSenderId: {json.dumps(sender_id)},",
               f"    projectId: {json.dumps(project_id)},",
           ]
+
           if bucket:
               lines.append(f"    storageBucket: {json.dumps(bucket)},")
-          lines += ["  );", "}"]
-          Path("lib/firebase_options.dart").write_text("\n".join(lines) + "\n")
+
+          lines.extend(["  );", "}"])
+          Path("lib/firebase_options.dart").write_text(
+              "\n".join(lines) + "\n"
+          )
           PY
 
-      - name: Write TiKTWO application
+      - name: Write complete TiKTWO app
+        shell: bash
         run: |
           cat > lib/main.dart <<'DART'
           import 'package:cloud_firestore/cloud_firestore.dart';
@@ -133,16 +161,12 @@ jobs:
                 title: 'TiKTWO',
                 debugShowCheckedModeBanner: false,
                 theme: ThemeData(
+                  useMaterial3: true,
                   brightness: Brightness.dark,
                   scaffoldBackgroundColor: bg,
                   colorScheme: ColorScheme.fromSeed(
                     seedColor: pink,
                     brightness: Brightness.dark,
-                  ),
-                  useMaterial3: true,
-                  appBarTheme: const AppBarTheme(
-                    backgroundColor: bg,
-                    foregroundColor: Colors.white,
                   ),
                 ),
                 home: const AuthGate(),
@@ -165,8 +189,16 @@ jobs:
                       ),
                     );
                   }
-                  if (snapshot.data == null) return const LoginScreen();
-                  return const MainScreen();
+                  if (snapshot.hasError) {
+                    return const Scaffold(
+                      body: Center(
+                        child: Text('تعذر الاتصال بخدمة الحسابات'),
+                      ),
+                    );
+                  }
+                  return snapshot.data == null
+                      ? const LoginScreen()
+                      : const MainScreen();
                 },
               );
             }
@@ -183,35 +215,41 @@ jobs:
             final email = TextEditingController();
             final password = TextEditingController();
             final name = TextEditingController();
-            bool register = false;
+            bool registering = false;
             bool busy = false;
 
-            @override
-            void dispose() {
-              email.dispose();
-              password.dispose();
-              name.dispose();
-              super.dispose();
+            void showMessage(String text) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(text)),
+              );
             }
 
             Future<void> submit() async {
-              if (email.text.trim().isEmpty || password.text.length < 6) {
-                message('اكتب البريد وكلمة مرور من 6 أحرف على الأقل');
+              if (email.text.trim().isEmpty ||
+                  password.text.length < 6) {
+                showMessage('أدخل البريد وكلمة مرور من 6 أحرف على الأقل');
                 return;
               }
+
               setState(() => busy = true);
+
               try {
+                final auth = FirebaseAuth.instance;
                 UserCredential result;
-                if (register) {
-                  result = await FirebaseAuth.instance
-                      .createUserWithEmailAndPassword(
+
+                if (registering) {
+                  result = await auth.createUserWithEmailAndPassword(
                     email: email.text.trim(),
                     password: password.text,
                   );
+
                   final displayName = name.text.trim().isEmpty
                       ? email.text.trim().split('@').first
                       : name.text.trim();
+
                   await result.user?.updateDisplayName(displayName);
+
                   await FirebaseFirestore.instance
                       .collection('users')
                       .doc(result.user!.uid)
@@ -221,32 +259,26 @@ jobs:
                     'createdAt': FieldValue.serverTimestamp(),
                   });
                 } else {
-                  result = await FirebaseAuth.instance
-                      .signInWithEmailAndPassword(
+                  result = await auth.signInWithEmailAndPassword(
                     email: email.text.trim(),
                     password: password.text,
                   );
-                  await FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(result.user!.uid)
-                      .set({
-                    'email': email.text.trim(),
-                    'lastSeen': FieldValue.serverTimestamp(),
-                  }, SetOptions(merge: true));
                 }
               } on FirebaseAuthException catch (e) {
-                message(e.message ?? 'تعذر تسجيل الدخول');
-              } catch (_) {
-                message('حدث خطأ. تأكد من اتصال الإنترنت وإعدادات Firebase');
+                showMessage(e.message ?? 'تعذر إتمام تسجيل الدخول');
+              } catch (e) {
+                showMessage('حدث خطأ. تحقق من الإنترنت وإعدادات Firebase');
               } finally {
                 if (mounted) setState(() => busy = false);
               }
             }
 
-            void message(String text) {
-              if (!mounted) return;
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(SnackBar(content: Text(text)));
+            @override
+            void dispose() {
+              email.dispose();
+              password.dispose();
+              name.dispose();
+              super.dispose();
             }
 
             @override
@@ -257,7 +289,7 @@ jobs:
                     gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
-                      colors: [bg, Color(0xFF24102E), bg],
+                      colors: [bg, Color(0xFF281035), bg],
                     ),
                   ),
                   child: SafeArea(
@@ -267,21 +299,21 @@ jobs:
                         child: Column(
                           children: [
                             Container(
-                              width: 90,
-                              height: 90,
+                              width: 88,
+                              height: 88,
                               decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(28),
+                                borderRadius: BorderRadius.circular(26),
                                 gradient: const LinearGradient(
                                   colors: [pink, purple],
                                 ),
                               ),
                               child: const Icon(
                                 Icons.play_arrow_rounded,
-                                size: 62,
+                                size: 60,
                                 color: Colors.white,
                               ),
                             ),
-                            const SizedBox(height: 18),
+                            const SizedBox(height: 16),
                             const Text(
                               'TiKTWO',
                               style: TextStyle(
@@ -290,12 +322,9 @@ jobs:
                                 letterSpacing: 2,
                               ),
                             ),
-                            const Text(
-                              'عالمك، فيديوهاتك، لحظاتك',
-                              style: TextStyle(color: Colors.white70),
-                            ),
-                            const SizedBox(height: 32),
-                            if (register) ...[
+                            const Text('عالمك، فيديوهاتك، لحظاتك'),
+                            const SizedBox(height: 30),
+                            if (registering) ...[
                               TextField(
                                 controller: name,
                                 decoration: const InputDecoration(
@@ -332,31 +361,26 @@ jobs:
                               child: FilledButton(
                                 style: FilledButton.styleFrom(
                                   backgroundColor: pink,
-                                  foregroundColor: Colors.white,
                                 ),
                                 onPressed: busy ? null : submit,
                                 child: busy
                                     ? const CircularProgressIndicator()
                                     : Text(
-                                        register
-                                            ? 'إنشاء حساب جديد'
+                                        registering
+                                            ? 'إنشاء حساب'
                                             : 'تسجيل الدخول',
-                                        style: const TextStyle(
-                                          fontSize: 17,
-                                          fontWeight: FontWeight.bold,
-                                        ),
+                                        style: const TextStyle(fontSize: 17),
                                       ),
                               ),
                             ),
                             TextButton(
                               onPressed: () => setState(
-                                () => register = !register,
+                                () => registering = !registering,
                               ),
                               child: Text(
-                                register
-                                    ? 'عندك حساب؟ سجل دخول'
-                                    : 'ما عندك حساب؟ أنشئ حساب مجاني',
-                                style: const TextStyle(color: Colors.white),
+                                registering
+                                    ? 'عندي حساب بالفعل'
+                                    : 'إنشاء حساب جديد',
                               ),
                             ),
                           ],
@@ -381,19 +405,20 @@ jobs:
 
             @override
             Widget build(BuildContext context) {
-              final pages = [
-                const VideoFeed(),
-                const UploadScreen(),
-                const ProfileScreen(),
+              const pages = [
+                VideoFeed(),
+                UploadScreen(),
+                ProfileScreen(),
               ];
+
               return Scaffold(
                 body: IndexedStack(index: tab, children: pages),
                 bottomNavigationBar: NavigationBar(
                   backgroundColor: const Color(0xFF100D16),
-                  indicatorColor: pink.withValues(alpha: 0.22),
+                  indicatorColor: pink.withValues(alpha: 0.2),
                   selectedIndex: tab,
-                  onDestinationSelected: (value) =>
-                      setState(() => tab = value),
+                  onDestinationSelected: (index) =>
+                      setState(() => tab = index),
                   destinations: const [
                     NavigationDestination(
                       icon: Icon(Icons.home_outlined),
@@ -403,7 +428,7 @@ jobs:
                     NavigationDestination(
                       icon: Icon(Icons.add_box_outlined),
                       selectedIcon: Icon(Icons.add_box, color: pink),
-                      label: 'إضافة فيديو',
+                      label: 'إضافة',
                     ),
                     NavigationDestination(
                       icon: Icon(Icons.person_outline),
@@ -429,10 +454,12 @@ jobs:
               'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
               'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4',
             ];
+
             final controllers = <VideoPlayerController>[];
             final liked = <int>{};
-            bool ready = false;
             int current = 0;
+            bool loading = true;
+            bool failed = false;
 
             @override
             void initState() {
@@ -443,233 +470,261 @@ jobs:
             Future<void> prepare() async {
               try {
                 for (final url in urls) {
-                  final c = VideoPlayerController.networkUrl(Uri.parse(url));
-                  controllers.add(c);
+                  controllers.add(
+                    VideoPlayerController.networkUrl(Uri.parse(url)),
+                  );
                 }
-                await Future.wait(controllers.map((c) async {
-                  await c.initialize();
-                  await c.setLooping(true);
-                  await c.setVolume(1);
-                }));
+
+                await Future.wait(
+                  controllers.map((controller) async {
+                    await controller.initialize();
+                    await controller.setLooping(true);
+                  }),
+                );
+
                 if (!mounted) return;
-                setState(() => ready = true);
-                controllers.first.play();
+                setState(() {
+                  loading = false;
+                  failed = false;
+                });
+                await controllers.first.play();
               } catch (_) {
-                if (mounted) setState(() => ready = false);
+                if (!mounted) return;
+                setState(() {
+                  loading = false;
+                  failed = true;
+                });
               }
             }
 
             @override
             void dispose() {
-              for (final c in controllers) {
-                c.dispose();
+              for (final controller in controllers) {
+                controller.dispose();
               }
               super.dispose();
             }
 
             @override
             Widget build(BuildContext context) {
-              if (controllers.isEmpty || !ready) {
+              if (loading) {
                 return const Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.play_circle_fill, size: 64, color: pink),
+                      Icon(Icons.play_circle_fill, size: 70, color: pink),
                       SizedBox(height: 12),
-                      Text('TiKTWO', style: TextStyle(fontSize: 28)),
-                      SizedBox(height: 8),
-                      Text('جارٍ تحميل الفيديوهات...'),
-                      SizedBox(height: 16),
+                      Text(
+                        'TiKTWO',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 12),
                       CircularProgressIndicator(color: purple),
+                      SizedBox(height: 12),
+                      Text('جارٍ تحميل الفيديوهات...'),
                     ],
                   ),
                 );
               }
 
-              return Stack(
-                children: [
-                  PageView.builder(
-                    scrollDirection: Axis.vertical,
-                    itemCount: controllers.length,
-                    onPageChanged: (index) {
-                      controllers[current].pause();
-                      current = index;
-                      controllers[current].play();
-                      setState(() {});
-                    },
-                    itemBuilder: (context, index) {
-                      final c = controllers[index];
-                      return Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                c.value.isPlaying ? c.pause() : c.play();
-                              });
-                            },
-                            child: FittedBox(
-                              fit: BoxFit.cover,
-                              child: SizedBox(
-                                width: c.value.size.width,
-                                height: c.value.size.height,
-                                child: VideoPlayer(c),
+              if (failed || controllers.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.wifi_off, size: 55, color: pink),
+                      const SizedBox(height: 12),
+                      const Text('تعذر تحميل الفيديوهات'),
+                      const SizedBox(height: 12),
+                      FilledButton(
+                        onPressed: () {
+                          for (final c in controllers) {
+                            c.dispose();
+                          }
+                          controllers.clear();
+                          setState(() {
+                            loading = true;
+                            failed = false;
+                          });
+                          prepare();
+                        },
+                        child: const Text('إعادة المحاولة'),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              return PageView.builder(
+                scrollDirection: Axis.vertical,
+                itemCount: controllers.length,
+                onPageChanged: (index) {
+                  controllers[current].pause();
+                  current = index;
+                  controllers[current].play();
+                  setState(() {});
+                },
+                itemBuilder: (context, index) {
+                  final c = controllers[index];
+
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            if (c.value.isPlaying) {
+                              c.pause();
+                            } else {
+                              c.play();
+                            }
+                          });
+                        },
+                        child: FittedBox(
+                          fit: BoxFit.cover,
+                          child: SizedBox(
+                            width: c.value.size.width,
+                            height: c.value.size.height,
+                            child: VideoPlayer(c),
+                          ),
+                        ),
+                      ),
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Color(0x55000000),
+                              Colors.transparent,
+                              Color(0xBB000000),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 48,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: RichText(
+                            text: const TextSpan(
+                              style: TextStyle(
+                                fontSize: 27,
+                                fontWeight: FontWeight.w900,
                               ),
+                              children: [
+                                TextSpan(
+                                  text: 'TiK',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                                TextSpan(
+                                  text: 'TWO',
+                                  style: TextStyle(color: pink),
+                                ),
+                              ],
                             ),
                           ),
-                          const DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  Color(0x66000000),
-                                  Colors.transparent,
-                                  Color(0xAA000000),
-                                ],
+                        ),
+                      ),
+                      Positioned(
+                        right: 12,
+                        bottom: 105,
+                        child: Column(
+                          children: [
+                            const CircleAvatar(
+                              radius: 24,
+                              backgroundColor: purple,
+                              child: Icon(Icons.person, color: Colors.white),
+                            ),
+                            const SizedBox(height: 16),
+                            IconButton(
+                              onPressed: () => setState(() {
+                                if (!liked.add(index)) liked.remove(index);
+                              }),
+                              icon: Icon(
+                                liked.contains(index)
+                                    ? Icons.favorite
+                                    : Icons.favorite_border,
+                                color: liked.contains(index)
+                                    ? pink
+                                    : Colors.white,
+                                size: 34,
                               ),
                             ),
-                          ),
-                          Positioned(
-                            top: 48,
-                            left: 0,
-                            right: 0,
-                            child: Center(
-                              child: RichText(
-                                text: const TextSpan(
-                                  style: TextStyle(
-                                    fontSize: 25,
-                                    fontWeight: FontWeight.w900,
+                            Text(liked.contains(index) ? 'أعجبك' : 'إعجاب'),
+                            const SizedBox(height: 14),
+                            IconButton(
+                              onPressed: () => showDialog<void>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text('التعليقات'),
+                                  content: const Text(
+                                    'ميزة التعليقات تحتاج إلى استكمال إعدادات التطبيق.',
                                   ),
-                                  children: [
-                                    TextSpan(
-                                      text: 'TiK',
-                                      style: TextStyle(color: Colors.white),
-                                    ),
-                                    TextSpan(
-                                      text: 'TWO',
-                                      style: TextStyle(color: pink),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(ctx),
+                                      child: const Text('إغلاق'),
                                     ),
                                   ],
                                 ),
                               ),
+                              icon: const Icon(
+                                Icons.comment_outlined,
+                                size: 30,
+                              ),
                             ),
-                          ),
-                          Positioned(
-                            right: 14,
-                            bottom: 95,
-                            child: Column(
-                              children: [
-                                const CircleAvatar(
-                                  radius: 25,
-                                  backgroundColor: purple,
-                                  child: Icon(
-                                    Icons.person,
-                                    color: Colors.white,
-                                  ),
+                            const Text('تعليق'),
+                            const SizedBox(height: 14),
+                            IconButton(
+                              onPressed: () => ScaffoldMessenger.of(context)
+                                  .showSnackBar(
+                                const SnackBar(
+                                  content: Text('المشاركة ستتوفر لاحقاً'),
                                 ),
-                                const SizedBox(height: 20),
-                                IconButton(
-                                  onPressed: () {
-                                    setState(() {
-                                      if (liked.contains(index)) {
-                                        liked.remove(index);
-                                      } else {
-                                        liked.add(index);
-                                      }
-                                    });
-                                  },
-                                  icon: Icon(
-                                    liked.contains(index)
-                                        ? Icons.favorite
-                                        : Icons.favorite_border,
-                                    color: liked.contains(index)
-                                        ? pink
-                                        : Colors.white,
-                                    size: 34,
-                                  ),
-                                ),
-                                Text(liked.contains(index) ? 'أعجبك' : 'إعجاب'),
-                                const SizedBox(height: 16),
-                                IconButton(
-                                  onPressed: () => showDialog<void>(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      title: const Text('التعليقات'),
-                                      content: const Text(
-                                        'التعليقات ستتوفر عند إعداد خدمة الفيديوهات والحسابات بشكل كامل.',
-                                      ),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () => Navigator.pop(ctx),
-                                          child: const Text('حسناً'),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  icon: const Icon(
-                                    Icons.comment_outlined,
-                                    size: 32,
-                                  ),
-                                ),
-                                const Text('تعليق'),
-                                const SizedBox(height: 16),
-                                IconButton(
-                                  onPressed: () {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                          'مشاركة الفيديو ستتوفر لاحقاً',
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  icon: const Icon(
-                                    Icons.share_outlined,
-                                    size: 30,
-                                  ),
-                                ),
-                                const Text('مشاركة'),
-                              ],
+                              ),
+                              icon: const Icon(Icons.share_outlined, size: 30),
                             ),
-                          ),
-                          Positioned(
-                            left: 18,
-                            right: 85,
-                            bottom: 38,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '@tiktwo_${index + 1}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 17,
-                                  ),
-                                ),
-                                const SizedBox(height: 7),
-                                const Text(
-                                  'اكتشف لحظات جديدة على TiKTWO ✨',
-                                  style: TextStyle(fontSize: 14),
-                                ),
-                                const SizedBox(height: 12),
-                                VideoProgressIndicator(
-                                  c,
-                                  allowScrubbing: true,
-                                  colors: const VideoProgressColors(
-                                    playedColor: pink,
-                                    bufferedColor: purple,
-                                    backgroundColor: Colors.white24,
-                                  ),
-                                ),
-                              ],
+                            const Text('مشاركة'),
+                          ],
+                        ),
+                      ),
+                      Positioned(
+                        left: 16,
+                        right: 85,
+                        bottom: 34,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '@tiktwo_${index + 1}',
+                              style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ],
+                            const SizedBox(height: 8),
+                            const Text('اكتشف لحظات جديدة على TiKTWO ✨'),
+                            const SizedBox(height: 12),
+                            VideoProgressIndicator(
+                              c,
+                              allowScrubbing: true,
+                              colors: const VideoProgressColors(
+                                playedColor: pink,
+                                bufferedColor: purple,
+                                backgroundColor: Colors.white24,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
               );
             }
           }
@@ -683,23 +738,23 @@ jobs:
 
           class _UploadScreenState extends State<UploadScreen> {
             String? selectedName;
-            bool picking = false;
+            bool busy = false;
 
             Future<void> chooseVideo() async {
+              setState(() => busy = true);
               try {
-                setState(() => picking = true);
                 final file = await ImagePicker().pickVideo(
                   source: ImageSource.gallery,
                   maxDuration: const Duration(minutes: 3),
                 );
+
                 if (file != null && mounted) {
                   setState(() => selectedName = file.name);
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text(
-                        'تم اختيار الفيديو من الهاتف. لن يظهر للآخرين حتى نضيف خدمة تخزين ونشر الفيديوهات.',
+                        'تم اختيار الفيديو. نشره للآخرين يحتاج إلى خدمة تخزين.',
                       ),
-                      duration: Duration(seconds: 5),
                     ),
                   );
                 }
@@ -707,12 +762,12 @@ jobs:
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('تعذر اختيار الفيديو. حاول مرة أخرى.'),
+                      content: Text('تعذر اختيار الفيديو من الهاتف'),
                     ),
                   );
                 }
               } finally {
-                if (mounted) setState(() => picking = false);
+                if (mounted) setState(() => busy = false);
               }
             }
 
@@ -747,12 +802,9 @@ jobs:
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                        const SizedBox(height: 10),
-                        const Text(
-                          'اختر فيديو من معرض هاتفك',
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 12),
+                        const Text('اختر فيديو من معرض هاتفك'),
+                        const SizedBox(height: 22),
                         SizedBox(
                           width: double.infinity,
                           height: 52,
@@ -760,26 +812,29 @@ jobs:
                             style: FilledButton.styleFrom(
                               backgroundColor: pink,
                             ),
-                            onPressed: picking ? null : chooseVideo,
+                            onPressed: busy ? null : chooseVideo,
                             icon: const Icon(Icons.add),
                             label: Text(
-                              picking ? 'جارٍ الاختيار...' : 'اختيار فيديو',
+                              busy ? 'جارٍ الاختيار...' : 'اختيار فيديو',
                             ),
                           ),
                         ),
                         if (selectedName != null) ...[
                           const SizedBox(height: 18),
-                          const Icon(Icons.check_circle, color: purple),
+                          const Icon(
+                            Icons.check_circle,
+                            color: purple,
+                            size: 32,
+                          ),
                           const SizedBox(height: 8),
                           Text(
                             selectedName!,
                             textAlign: TextAlign.center,
                           ),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 8),
                           const Text(
-                            'الفيديو مختار على جهازك، لكنه لم يُنشر على الإنترنت.',
+                            'الفيديو موجود على جهازك ولم يُنشر للآخرين.',
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.white70),
                           ),
                         ],
                       ],
@@ -831,22 +886,18 @@ jobs:
                           ),
                         ),
                         const SizedBox(height: 8),
-                        Text(
-                          user?.email ?? '',
-                          style: const TextStyle(color: Colors.white70),
-                        ),
+                        Text(user?.email ?? ''),
                         const SizedBox(height: 28),
                         const Text(
                           'أهلاً بك في مجتمع TiKTWO',
-                          style: TextStyle(color: purple, fontSize: 16),
+                          style: TextStyle(color: purple, fontSize: 17),
                         ),
                         const SizedBox(height: 28),
                         SizedBox(
                           width: double.infinity,
                           child: OutlinedButton.icon(
-                            onPressed: () async {
-                              await FirebaseAuth.instance.signOut();
-                            },
+                            onPressed: () =>
+                                FirebaseAuth.instance.signOut(),
                             icon: const Icon(Icons.logout, color: pink),
                             label: const Text('تسجيل الخروج'),
                           ),
@@ -860,16 +911,19 @@ jobs:
           }
           DART
 
-      - name: Get packages
+      - name: Get Flutter packages
         run: flutter pub get
 
-      - name: Check Dart code
+      - name: Remove default Flutter test
+        run: rm -f test/widget_test.dart
+
+      - name: Analyze application
         run: flutter analyze --no-pub
 
-      - name: Build APK
+      - name: Build release APK
         run: flutter build apk --release
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: TiKTWO-APK
