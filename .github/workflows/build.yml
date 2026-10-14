@@ -1,43 +1,128 @@
 
-name: Build TiKTWO
+name: Build TiKTWO APK
 
 'on':
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    name: Build Android APK
+    name: Build TiKTWO Android
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Download project files
         uses: actions/checkout@v4
+
+      - name: Check Firebase configuration
+        run: |
+          if [ ! -f google-services.json ]; then
+            echo "ERROR: google-services.json is missing from the repository root."
+            exit 1
+          fi
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
       - name: Create Flutter project
         run: |
           flutter create --project-name tiktwo --org com.tiktwo .
 
+      - name: Set Android app name and internet permission
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          s = re.sub(r'android:label="[^"]*"', 'android:label="TiKTWO"', s)
+          if 'android.permission.INTERNET' not in s:
+              s = s.replace('<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ', 1)
+              s = s.replace('<application', '<uses-permission android:name="android.permission.INTERNET" />\n    <application', 1)
+          p.write_text(s)
+
+          for name in ("android/app/build.gradle.kts", "android/app/build.gradle"):
+              p = Path(name)
+              if p.exists():
+                  s = p.read_text()
+                  s = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = 23', s)
+                  s = re.sub(r'minSdkVersion\s+flutter\.minSdkVersion', 'minSdkVersion 23', s)
+                  p.write_text(s)
+          PY
+
+      - name: Install app packages
+        run: |
+          flutter pub add firebase_core firebase_auth cloud_firestore video_player image_picker
+
+      - name: Configure Firebase from downloaded file
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("google-services.json").read_text())
+          info = data["project_info"]
+          client = next(
+              (c for c in data["client"]
+               if c["client_info"]["android_client_info"]["package_name"] == "com.tiktwo.tiktwo"),
+              None
+          )
+          if client is None:
+              raise SystemExit("Firebase Android package must be com.tiktwo.tiktwo")
+
+          api_key = client["api_key"][0]["current_key"]
+          app_id = client["client_info"]["mobilesdk_app_id"]
+          project_id = info["project_id"]
+          sender_id = info["project_number"]
+          bucket = info.get("storage_bucket")
+
+          lines = [
+              "import 'package:firebase_core/firebase_core.dart';",
+              "",
+              "class DefaultFirebaseOptions {",
+              "  static const FirebaseOptions android = FirebaseOptions(",
+              f"    apiKey: {json.dumps(api_key)},",
+              f"    appId: {json.dumps(app_id)},",
+              f"    messagingSenderId: {json.dumps(str(sender_id))},",
+              f"    projectId: {json.dumps(project_id)},",
+          ]
+          if bucket:
+              lines.append(f"    storageBucket: {json.dumps(bucket)},")
+          lines += ["  );", "}"]
+          Path("lib/firebase_options.dart").write_text("\n".join(lines) + "\n")
+          PY
+
       - name: Write TiKTWO application
-        shell: bash
         run: |
           cat > lib/main.dart <<'DART'
+          import 'package:cloud_firestore/cloud_firestore.dart';
+          import 'package:firebase_auth/firebase_auth.dart';
+          import 'package:firebase_core/firebase_core.dart';
           import 'package:flutter/material.dart';
+          import 'package:image_picker/image_picker.dart';
+          import 'package:video_player/video_player.dart';
+          import 'firebase_options.dart';
 
-          void main() {
+          const bg = Color(0xFF09070D);
+          const pink = Color(0xFFFF2D8D);
+          const purple = Color(0xFF9B5CFF);
+
+          Future<void> main() async {
+            WidgetsFlutterBinding.ensureInitialized();
+            await Firebase.initializeApp(
+              options: DefaultFirebaseOptions.android,
+            );
             runApp(const TikTwoApp());
           }
-
-          const Color pink = Color(0xFFFF2D75);
-          const Color purple = Color(0xFF8B5CF6);
-          const Color darkBackground = Color(0xFF09090F);
 
           class TikTwoApp extends StatelessWidget {
             const TikTwoApp({super.key});
@@ -49,406 +134,725 @@ jobs:
                 debugShowCheckedModeBanner: false,
                 theme: ThemeData(
                   brightness: Brightness.dark,
-                  scaffoldBackgroundColor: darkBackground,
+                  scaffoldBackgroundColor: bg,
                   colorScheme: ColorScheme.fromSeed(
                     seedColor: pink,
                     brightness: Brightness.dark,
                   ),
                   useMaterial3: true,
+                  appBarTheme: const AppBarTheme(
+                    backgroundColor: bg,
+                    foregroundColor: Colors.white,
+                  ),
                 ),
-                home: const VideoFeedPage(),
+                home: const AuthGate(),
               );
             }
           }
 
-          class VideoFeedPage extends StatefulWidget {
-            const VideoFeedPage({super.key});
+          class AuthGate extends StatelessWidget {
+            const AuthGate({super.key});
 
             @override
-            State<VideoFeedPage> createState() => _VideoFeedPageState();
-          }
-
-          class _VideoFeedPageState extends State<VideoFeedPage> {
-            int videoIndex = 0;
-            int selectedTab = 0;
-
-            final Set<int> likedVideos = <int>{};
-
-            final List<Map<String, String>> videos = [
-              {
-                'name': 'Mira',
-                'username': '@mira.vibes',
-                'caption': 'يوم جديد، طاقة جديدة ✨',
-              },
-              {
-                'name': 'Ali',
-                'username': '@ali.creator',
-                'caption': 'عيش اللحظة 💜',
-              },
-              {
-                'name': 'Noor',
-                'username': '@noor.daily',
-                'caption': 'ابتسم، الحياة حلوة 🌸',
-              },
-            ];
-
-            void showMessage(String message) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(message),
-                  backgroundColor: purple,
-                ),
+            Widget build(BuildContext context) {
+              return StreamBuilder<User?>(
+                stream: FirebaseAuth.instance.authStateChanges(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Scaffold(
+                      body: Center(
+                        child: CircularProgressIndicator(color: pink),
+                      ),
+                    );
+                  }
+                  if (snapshot.data == null) return const LoginScreen();
+                  return const MainScreen();
+                },
               );
             }
+          }
 
-            void nextVideo() {
-              setState(() {
-                videoIndex = (videoIndex + 1) % videos.length;
-              });
+          class LoginScreen extends StatefulWidget {
+            const LoginScreen({super.key});
+
+            @override
+            State<LoginScreen> createState() => _LoginScreenState();
+          }
+
+          class _LoginScreenState extends State<LoginScreen> {
+            final email = TextEditingController();
+            final password = TextEditingController();
+            final name = TextEditingController();
+            bool register = false;
+            bool busy = false;
+
+            @override
+            void dispose() {
+              email.dispose();
+              password.dispose();
+              name.dispose();
+              super.dispose();
+            }
+
+            Future<void> submit() async {
+              if (email.text.trim().isEmpty || password.text.length < 6) {
+                message('اكتب البريد وكلمة مرور من 6 أحرف على الأقل');
+                return;
+              }
+              setState(() => busy = true);
+              try {
+                UserCredential result;
+                if (register) {
+                  result = await FirebaseAuth.instance
+                      .createUserWithEmailAndPassword(
+                    email: email.text.trim(),
+                    password: password.text,
+                  );
+                  final displayName = name.text.trim().isEmpty
+                      ? email.text.trim().split('@').first
+                      : name.text.trim();
+                  await result.user?.updateDisplayName(displayName);
+                  await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(result.user!.uid)
+                      .set({
+                    'name': displayName,
+                    'email': email.text.trim(),
+                    'createdAt': FieldValue.serverTimestamp(),
+                  });
+                } else {
+                  result = await FirebaseAuth.instance
+                      .signInWithEmailAndPassword(
+                    email: email.text.trim(),
+                    password: password.text,
+                  );
+                  await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(result.user!.uid)
+                      .set({
+                    'email': email.text.trim(),
+                    'lastSeen': FieldValue.serverTimestamp(),
+                  }, SetOptions(merge: true));
+                }
+              } on FirebaseAuthException catch (e) {
+                message(e.message ?? 'تعذر تسجيل الدخول');
+              } catch (_) {
+                message('حدث خطأ. تأكد من اتصال الإنترنت وإعدادات Firebase');
+              } finally {
+                if (mounted) setState(() => busy = false);
+              }
+            }
+
+            void message(String text) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(SnackBar(content: Text(text)));
             }
 
             @override
             Widget build(BuildContext context) {
-              final Map<String, String> currentVideo =
-                  videos[videoIndex];
-
               return Scaffold(
-                body: SafeArea(
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      GestureDetector(
-                        onVerticalDragEnd: (details) {
-                          if (details.primaryVelocity != null &&
-                              details.primaryVelocity! < 0) {
-                            nextVideo();
-                          }
-                        },
-                        child: Container(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                videoIndex.isEven
-                                    ? const Color(0xFF42164B)
-                                    : const Color(0xFF172D50),
-                                const Color(0xFF211025),
-                                darkBackground,
-                              ],
-                            ),
-                          ),
-                          child: Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  width: 108,
-                                  height: 108,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    gradient: const LinearGradient(
-                                      colors: [pink, purple],
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: pink.withAlpha(90),
-                                        blurRadius: 32,
-                                      ),
-                                    ],
-                                  ),
-                                  child: const Icon(
-                                    Icons.play_arrow_rounded,
-                                    size: 78,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                const SizedBox(height: 22),
-                                const Text(
-                                  'TiKTWO',
-                                  style: TextStyle(
-                                    fontSize: 35,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: 3,
-                                  ),
-                                ),
-                                const SizedBox(height: 10),
-                                const Text(
-                                  'كل لحظة إلها قصة',
-                                  style: TextStyle(
-                                    fontSize: 17,
-                                    color: Colors.white70,
-                                  ),
-                                ),
-                                const SizedBox(height: 18),
-                                const Text(
-                                  'اسحب للأعلى للتنقل',
-                                  style: TextStyle(
-                                    color: Colors.white54,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      Positioned(
-                        top: 14,
-                        left: 0,
-                        right: 0,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                body: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [bg, Color(0xFF24102E), bg],
+                    ),
+                  ),
+                  child: SafeArea(
+                    child: Center(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(26),
+                        child: Column(
                           children: [
-                            const Text(
-                              'أتابع',
-                              style: TextStyle(
-                                color: Colors.white70,
-                              ),
-                            ),
-                            const SizedBox(width: 22),
                             Container(
-                              padding: const EdgeInsets.only(
-                                bottom: 6,
-                              ),
-                              decoration: const BoxDecoration(
-                                border: Border(
-                                  bottom: BorderSide(
-                                    color: pink,
-                                    width: 3,
-                                  ),
+                              width: 90,
+                              height: 90,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(28),
+                                gradient: const LinearGradient(
+                                  colors: [pink, purple],
                                 ),
                               ),
-                              child: const Text(
-                                'لك',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 22),
-                            const Icon(Icons.search, size: 27),
-                          ],
-                        ),
-                      ),
-
-                      Positioned(
-                        left: 14,
-                        right: 82,
-                        bottom: 105,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              currentVideo['name']!,
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 5),
-                            Text(
-                              currentVideo['username']!,
-                              style: const TextStyle(
-                                color: Colors.white70,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Text(currentVideo['caption']!),
-                            const SizedBox(height: 12),
-                            const Row(
-                              children: [
-                                Icon(Icons.music_note, size: 18),
-                                SizedBox(width: 5),
-                                Expanded(
-                                  child: Text(
-                                    'الصوت الأصلي - TiKTWO',
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      Positioned(
-                        right: 10,
-                        bottom: 108,
-                        child: Column(
-                          children: [
-                            const CircleAvatar(
-                              radius: 25,
-                              backgroundColor: purple,
-                              child: Icon(
-                                Icons.person,
-                                size: 30,
+                              child: const Icon(
+                                Icons.play_arrow_rounded,
+                                size: 62,
                                 color: Colors.white,
                               ),
                             ),
-                            const SizedBox(height: 15),
-                            IconButton(
-                              onPressed: () {
-                                setState(() {
-                                  if (!likedVideos.add(videoIndex)) {
-                                    likedVideos.remove(videoIndex);
-                                  }
-                                });
-                              },
-                              icon: Icon(
-                                likedVideos.contains(videoIndex)
-                                    ? Icons.favorite
-                                    : Icons.favorite_border,
-                                color: likedVideos.contains(videoIndex)
-                                    ? pink
-                                    : Colors.white,
-                                size: 32,
+                            const SizedBox(height: 18),
+                            const Text(
+                              'TiKTWO',
+                              style: TextStyle(
+                                fontSize: 38,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 2,
                               ),
                             ),
-                            const Text('إعجاب'),
-                            const SizedBox(height: 12),
-                            IconButton(
-                              onPressed: () {
-                                showMessage(
-                                  'التعليقات نضيفها لاحقاً',
-                                );
-                              },
-                              icon: const Icon(
-                                Icons.comment_outlined,
-                                size: 30,
+                            const Text(
+                              'عالمك، فيديوهاتك، لحظاتك',
+                              style: TextStyle(color: Colors.white70),
+                            ),
+                            const SizedBox(height: 32),
+                            if (register) ...[
+                              TextField(
+                                controller: name,
+                                decoration: const InputDecoration(
+                                  labelText: 'اسم المستخدم',
+                                  prefixIcon: Icon(Icons.person_outline),
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                            ],
+                            TextField(
+                              controller: email,
+                              keyboardType: TextInputType.emailAddress,
+                              decoration: const InputDecoration(
+                                labelText: 'البريد الإلكتروني',
+                                prefixIcon: Icon(Icons.email_outlined),
+                                border: OutlineInputBorder(),
                               ),
                             ),
-                            const Text('تعليق'),
-                            const SizedBox(height: 12),
-                            IconButton(
-                              onPressed: () {
-                                showMessage(
-                                  'المشاركة نضيفها لاحقاً',
-                                );
-                              },
-                              icon: const Icon(
-                                Icons.share_outlined,
-                                size: 30,
+                            const SizedBox(height: 14),
+                            TextField(
+                              controller: password,
+                              obscureText: true,
+                              decoration: const InputDecoration(
+                                labelText: 'كلمة المرور',
+                                prefixIcon: Icon(Icons.lock_outline),
+                                border: OutlineInputBorder(),
                               ),
                             ),
-                            const Text('مشاركة'),
+                            const SizedBox(height: 22),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 52,
+                              child: FilledButton(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: pink,
+                                  foregroundColor: Colors.white,
+                                ),
+                                onPressed: busy ? null : submit,
+                                child: busy
+                                    ? const CircularProgressIndicator()
+                                    : Text(
+                                        register
+                                            ? 'إنشاء حساب جديد'
+                                            : 'تسجيل الدخول',
+                                        style: const TextStyle(
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => setState(
+                                () => register = !register,
+                              ),
+                              child: Text(
+                                register
+                                    ? 'عندك حساب؟ سجل دخول'
+                                    : 'ما عندك حساب؟ أنشئ حساب مجاني',
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ),
                           ],
                         ),
                       ),
-
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        child: Container(
-                          decoration: const BoxDecoration(
-                            color: darkBackground,
-                            border: Border(
-                              top: BorderSide(
-                                color: Colors.white12,
-                              ),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisAlignment:
-                                MainAxisAlignment.spaceAround,
-                            children: [
-                              _navItem(
-                                Icons.home_filled,
-                                'الرئيسية',
-                                0,
-                              ),
-                              _navItem(
-                                Icons.explore_outlined,
-                                'اكتشف',
-                                1,
-                              ),
-                              GestureDetector(
-                                onTap: () {
-                                  showMessage(
-                                    'رفع الفيديوهات نضيفه لاحقاً',
-                                  );
-                                },
-                                child: Container(
-                                  margin: const EdgeInsets.symmetric(
-                                    vertical: 10,
-                                  ),
-                                  width: 45,
-                                  height: 34,
-                                  decoration: BoxDecoration(
-                                    borderRadius:
-                                        BorderRadius.circular(9),
-                                    gradient: const LinearGradient(
-                                      colors: [pink, purple],
-                                    ),
-                                  ),
-                                  child: const Icon(
-                                    Icons.add,
-                                    size: 29,
-                                  ),
-                                ),
-                              ),
-                              _navItem(
-                                Icons.inbox_outlined,
-                                'الرسائل',
-                                2,
-                              ),
-                              _navItem(
-                                Icons.person_outline,
-                                'حسابي',
-                                3,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               );
             }
+          }
 
-            Widget _navItem(
-              IconData icon,
-              String label,
-              int value,
-            ) {
-              final bool isSelected = selectedTab == value;
+          class MainScreen extends StatefulWidget {
+            const MainScreen({super.key});
 
-              return GestureDetector(
-                onTap: () {
-                  setState(() {
-                    selectedTab = value;
-                  });
+            @override
+            State<MainScreen> createState() => _MainScreenState();
+          }
 
-                  if (value != 0) {
-                    showMessage(
-                      '$label — نضيفها بالمرحلة القادمة',
-                    );
-                  }
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 12,
-                  ),
+          class _MainScreenState extends State<MainScreen> {
+            int tab = 0;
+
+            @override
+            Widget build(BuildContext context) {
+              final pages = [
+                const VideoFeed(),
+                const UploadScreen(),
+                const ProfileScreen(),
+              ];
+              return Scaffold(
+                body: IndexedStack(index: tab, children: pages),
+                bottomNavigationBar: NavigationBar(
+                  backgroundColor: const Color(0xFF100D16),
+                  indicatorColor: pink.withValues(alpha: 0.22),
+                  selectedIndex: tab,
+                  onDestinationSelected: (value) =>
+                      setState(() => tab = value),
+                  destinations: const [
+                    NavigationDestination(
+                      icon: Icon(Icons.home_outlined),
+                      selectedIcon: Icon(Icons.home, color: pink),
+                      label: 'الرئيسية',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.add_box_outlined),
+                      selectedIcon: Icon(Icons.add_box, color: pink),
+                      label: 'إضافة فيديو',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.person_outline),
+                      selectedIcon: Icon(Icons.person, color: pink),
+                      label: 'حسابي',
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+
+          class VideoFeed extends StatefulWidget {
+            const VideoFeed({super.key});
+
+            @override
+            State<VideoFeed> createState() => _VideoFeedState();
+          }
+
+          class _VideoFeedState extends State<VideoFeed> {
+            final urls = const [
+              'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
+              'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
+              'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4',
+            ];
+            final controllers = <VideoPlayerController>[];
+            final liked = <int>{};
+            bool ready = false;
+            int current = 0;
+
+            @override
+            void initState() {
+              super.initState();
+              prepare();
+            }
+
+            Future<void> prepare() async {
+              try {
+                for (final url in urls) {
+                  final c = VideoPlayerController.networkUrl(Uri.parse(url));
+                  controllers.add(c);
+                }
+                await Future.wait(controllers.map((c) async {
+                  await c.initialize();
+                  await c.setLooping(true);
+                  await c.setVolume(1);
+                }));
+                if (!mounted) return;
+                setState(() => ready = true);
+                controllers.first.play();
+              } catch (_) {
+                if (mounted) setState(() => ready = false);
+              }
+            }
+
+            @override
+            void dispose() {
+              for (final c in controllers) {
+                c.dispose();
+              }
+              super.dispose();
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              if (controllers.isEmpty || !ready) {
+                return const Center(
                   child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        icon,
-                        size: 25,
-                        color: isSelected ? pink : Colors.white60,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        label,
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: isSelected ? pink : Colors.white60,
-                        ),
-                      ),
+                      Icon(Icons.play_circle_fill, size: 64, color: pink),
+                      SizedBox(height: 12),
+                      Text('TiKTWO', style: TextStyle(fontSize: 28)),
+                      SizedBox(height: 8),
+                      Text('جارٍ تحميل الفيديوهات...'),
+                      SizedBox(height: 16),
+                      CircularProgressIndicator(color: purple),
                     ],
+                  ),
+                );
+              }
+
+              return Stack(
+                children: [
+                  PageView.builder(
+                    scrollDirection: Axis.vertical,
+                    itemCount: controllers.length,
+                    onPageChanged: (index) {
+                      controllers[current].pause();
+                      current = index;
+                      controllers[current].play();
+                      setState(() {});
+                    },
+                    itemBuilder: (context, index) {
+                      final c = controllers[index];
+                      return Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                c.value.isPlaying ? c.pause() : c.play();
+                              });
+                            },
+                            child: FittedBox(
+                              fit: BoxFit.cover,
+                              child: SizedBox(
+                                width: c.value.size.width,
+                                height: c.value.size.height,
+                                child: VideoPlayer(c),
+                              ),
+                            ),
+                          ),
+                          const DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Color(0x66000000),
+                                  Colors.transparent,
+                                  Color(0xAA000000),
+                                ],
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            top: 48,
+                            left: 0,
+                            right: 0,
+                            child: Center(
+                              child: RichText(
+                                text: const TextSpan(
+                                  style: TextStyle(
+                                    fontSize: 25,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                  children: [
+                                    TextSpan(
+                                      text: 'TiK',
+                                      style: TextStyle(color: Colors.white),
+                                    ),
+                                    TextSpan(
+                                      text: 'TWO',
+                                      style: TextStyle(color: pink),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            right: 14,
+                            bottom: 95,
+                            child: Column(
+                              children: [
+                                const CircleAvatar(
+                                  radius: 25,
+                                  backgroundColor: purple,
+                                  child: Icon(
+                                    Icons.person,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 20),
+                                IconButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      if (liked.contains(index)) {
+                                        liked.remove(index);
+                                      } else {
+                                        liked.add(index);
+                                      }
+                                    });
+                                  },
+                                  icon: Icon(
+                                    liked.contains(index)
+                                        ? Icons.favorite
+                                        : Icons.favorite_border,
+                                    color: liked.contains(index)
+                                        ? pink
+                                        : Colors.white,
+                                    size: 34,
+                                  ),
+                                ),
+                                Text(liked.contains(index) ? 'أعجبك' : 'إعجاب'),
+                                const SizedBox(height: 16),
+                                IconButton(
+                                  onPressed: () => showDialog<void>(
+                                    context: context,
+                                    builder: (ctx) => AlertDialog(
+                                      title: const Text('التعليقات'),
+                                      content: const Text(
+                                        'التعليقات ستتوفر عند إعداد خدمة الفيديوهات والحسابات بشكل كامل.',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(ctx),
+                                          child: const Text('حسناً'),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  icon: const Icon(
+                                    Icons.comment_outlined,
+                                    size: 32,
+                                  ),
+                                ),
+                                const Text('تعليق'),
+                                const SizedBox(height: 16),
+                                IconButton(
+                                  onPressed: () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'مشاركة الفيديو ستتوفر لاحقاً',
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.share_outlined,
+                                    size: 30,
+                                  ),
+                                ),
+                                const Text('مشاركة'),
+                              ],
+                            ),
+                          ),
+                          Positioned(
+                            left: 18,
+                            right: 85,
+                            bottom: 38,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '@tiktwo_${index + 1}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 17,
+                                  ),
+                                ),
+                                const SizedBox(height: 7),
+                                const Text(
+                                  'اكتشف لحظات جديدة على TiKTWO ✨',
+                                  style: TextStyle(fontSize: 14),
+                                ),
+                                const SizedBox(height: 12),
+                                VideoProgressIndicator(
+                                  c,
+                                  allowScrubbing: true,
+                                  colors: const VideoProgressColors(
+                                    playedColor: pink,
+                                    bufferedColor: purple,
+                                    backgroundColor: Colors.white24,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              );
+            }
+          }
+
+          class UploadScreen extends StatefulWidget {
+            const UploadScreen({super.key});
+
+            @override
+            State<UploadScreen> createState() => _UploadScreenState();
+          }
+
+          class _UploadScreenState extends State<UploadScreen> {
+            String? selectedName;
+            bool picking = false;
+
+            Future<void> chooseVideo() async {
+              try {
+                setState(() => picking = true);
+                final file = await ImagePicker().pickVideo(
+                  source: ImageSource.gallery,
+                  maxDuration: const Duration(minutes: 3),
+                );
+                if (file != null && mounted) {
+                  setState(() => selectedName = file.name);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'تم اختيار الفيديو من الهاتف. لن يظهر للآخرين حتى نضيف خدمة تخزين ونشر الفيديوهات.',
+                      ),
+                      duration: Duration(seconds: 5),
+                    ),
+                  );
+                }
+              } catch (_) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('تعذر اختيار الفيديو. حاول مرة أخرى.'),
+                    ),
+                  );
+                }
+              } finally {
+                if (mounted) setState(() => picking = false);
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return SafeArea(
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 110,
+                          height: 110,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(28),
+                            gradient: const LinearGradient(
+                              colors: [pink, purple],
+                            ),
+                          ),
+                          child: const Icon(
+                            Icons.video_call_outlined,
+                            size: 62,
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        const Text(
+                          'أضف فيديوك',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        const Text(
+                          'اختر فيديو من معرض هاتفك',
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 24),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 52,
+                          child: FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: pink,
+                            ),
+                            onPressed: picking ? null : chooseVideo,
+                            icon: const Icon(Icons.add),
+                            label: Text(
+                              picking ? 'جارٍ الاختيار...' : 'اختيار فيديو',
+                            ),
+                          ),
+                        ),
+                        if (selectedName != null) ...[
+                          const SizedBox(height: 18),
+                          const Icon(Icons.check_circle, color: purple),
+                          const SizedBox(height: 8),
+                          Text(
+                            selectedName!,
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'الفيديو مختار على جهازك، لكنه لم يُنشر على الإنترنت.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+
+          class ProfileScreen extends StatelessWidget {
+            const ProfileScreen({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              final user = FirebaseAuth.instance.currentUser;
+              final displayName = user?.displayName ??
+                  user?.email?.split('@').first ??
+                  'مستخدم TiKTWO';
+
+              return SafeArea(
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 100,
+                          height: 100,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: LinearGradient(
+                              colors: [pink, purple],
+                            ),
+                          ),
+                          child: const Icon(
+                            Icons.person,
+                            size: 60,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Text(
+                          displayName,
+                          style: const TextStyle(
+                            fontSize: 25,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          user?.email ?? '',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                        const SizedBox(height: 28),
+                        const Text(
+                          'أهلاً بك في مجتمع TiKTWO',
+                          style: TextStyle(color: purple, fontSize: 16),
+                        ),
+                        const SizedBox(height: 28),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              await FirebaseAuth.instance.signOut();
+                            },
+                            icon: const Icon(Icons.logout, color: pink),
+                            label: const Text('تسجيل الخروج'),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               );
@@ -456,20 +860,18 @@ jobs:
           }
           DART
 
-      - name: Set Android application name
-        run: |
-          sed -i 's/android:label="[^"]*"/android:label="TiKTWO"/' android/app/src/main/AndroidManifest.xml
-
-      - name: Check Flutter project
+      - name: Get packages
         run: flutter pub get
 
-      - name: Build release APK
+      - name: Check Dart code
+        run: flutter analyze --no-pub
+
+      - name: Build APK
         run: flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TiKTWO-Android
+          name: TiKTWO-APK
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
-          retention-days: 7
