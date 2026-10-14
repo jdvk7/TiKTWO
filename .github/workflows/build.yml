@@ -45,12 +45,14 @@ jobs:
 
           p = Path("android/app/src/main/AndroidManifest.xml")
           s = p.read_text()
+
           if "android.permission.INTERNET" not in s:
               s = s.replace(
                   "<application",
                   '<uses-permission android:name="android.permission.INTERNET" />\n    <application',
                   1
               )
+
           s = re.sub(r'android:label="[^"]*"', 'android:label="TiKTWO"', s)
           p.write_text(s)
 
@@ -76,7 +78,7 @@ jobs:
 
       - name: Install app dependencies
         run: |
-          flutter pub add firebase_core firebase_auth cloud_firestore video_player image_picker
+          flutter pub add firebase_core firebase_auth cloud_firestore video_player image_picker share_plus
 
       - name: Generate Firebase options
         shell: bash
@@ -99,7 +101,7 @@ jobs:
 
           if client is None:
               raise SystemExit(
-                  "ERROR: Firebase Android package must be com.tiktwo.tiktwo"
+                  "ERROR: Firebase package must be com.tiktwo.tiktwo"
               )
 
           api_key = client["api_key"][0]["current_key"]
@@ -137,10 +139,12 @@ jobs:
           import 'package:firebase_core/firebase_core.dart';
           import 'package:flutter/material.dart';
           import 'package:image_picker/image_picker.dart';
+          import 'package:share_plus/share_plus.dart';
           import 'package:video_player/video_player.dart';
           import 'firebase_options.dart';
 
           const bg = Color(0xFF09070D);
+          const panel = Color(0xFF17121F);
           const pink = Color(0xFFFF2D8D);
           const purple = Color(0xFF9B5CFF);
 
@@ -167,6 +171,14 @@ jobs:
                   colorScheme: ColorScheme.fromSeed(
                     seedColor: pink,
                     brightness: Brightness.dark,
+                  ),
+                  inputDecorationTheme: InputDecorationTheme(
+                    filled: true,
+                    fillColor: panel,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide.none,
+                    ),
                   ),
                 ),
                 home: const AuthGate(),
@@ -218,7 +230,7 @@ jobs:
             bool registering = false;
             bool busy = false;
 
-            void showMessage(String text) {
+            void message(String text) {
               if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text(text)),
@@ -228,7 +240,7 @@ jobs:
             Future<void> submit() async {
               if (email.text.trim().isEmpty ||
                   password.text.length < 6) {
-                showMessage('أدخل البريد وكلمة مرور من 6 أحرف على الأقل');
+                message('أدخل البريد وكلمة مرور من 6 أحرف على الأقل');
                 return;
               }
 
@@ -236,10 +248,9 @@ jobs:
 
               try {
                 final auth = FirebaseAuth.instance;
-                UserCredential result;
 
                 if (registering) {
-                  result = await auth.createUserWithEmailAndPassword(
+                  final result = await auth.createUserWithEmailAndPassword(
                     email: email.text.trim(),
                     password: password.text,
                   );
@@ -259,15 +270,15 @@ jobs:
                     'createdAt': FieldValue.serverTimestamp(),
                   });
                 } else {
-                  result = await auth.signInWithEmailAndPassword(
+                  await auth.signInWithEmailAndPassword(
                     email: email.text.trim(),
                     password: password.text,
                   );
                 }
               } on FirebaseAuthException catch (e) {
-                showMessage(e.message ?? 'تعذر إتمام تسجيل الدخول');
-              } catch (e) {
-                showMessage('حدث خطأ. تحقق من الإنترنت وإعدادات Firebase');
+                message(e.message ?? 'تعذر تسجيل الدخول');
+              } catch (_) {
+                message('حدث خطأ. تحقق من الإنترنت وإعدادات Firebase');
               } finally {
                 if (mounted) setState(() => busy = false);
               }
@@ -289,7 +300,7 @@ jobs:
                     gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
-                      colors: [bg, Color(0xFF281035), bg],
+                      colors: [bg, Color(0xFF291038), bg],
                     ),
                   ),
                   child: SafeArea(
@@ -299,29 +310,29 @@ jobs:
                         child: Column(
                           children: [
                             Container(
-                              width: 88,
-                              height: 88,
+                              width: 92,
+                              height: 92,
                               decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(26),
+                                borderRadius: BorderRadius.circular(28),
                                 gradient: const LinearGradient(
                                   colors: [pink, purple],
                                 ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: pink.withValues(alpha: 0.3),
+                                    blurRadius: 28,
+                                  ),
+                                ],
                               ),
                               child: const Icon(
                                 Icons.play_arrow_rounded,
-                                size: 60,
+                                size: 65,
                                 color: Colors.white,
                               ),
                             ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              'TiKTWO',
-                              style: TextStyle(
-                                fontSize: 38,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 2,
-                              ),
-                            ),
+                            const SizedBox(height: 18),
+                            const BrandTitle(size: 38),
+                            const SizedBox(height: 8),
                             const Text('عالمك، فيديوهاتك، لحظاتك'),
                             const SizedBox(height: 30),
                             if (registering) ...[
@@ -330,7 +341,6 @@ jobs:
                                 decoration: const InputDecoration(
                                   labelText: 'اسم المستخدم',
                                   prefixIcon: Icon(Icons.person_outline),
-                                  border: OutlineInputBorder(),
                                 ),
                               ),
                               const SizedBox(height: 14),
@@ -341,7 +351,6 @@ jobs:
                               decoration: const InputDecoration(
                                 labelText: 'البريد الإلكتروني',
                                 prefixIcon: Icon(Icons.email_outlined),
-                                border: OutlineInputBorder(),
                               ),
                             ),
                             const SizedBox(height: 14),
@@ -351,13 +360,12 @@ jobs:
                               decoration: const InputDecoration(
                                 labelText: 'كلمة المرور',
                                 prefixIcon: Icon(Icons.lock_outline),
-                                border: OutlineInputBorder(),
                               ),
                             ),
                             const SizedBox(height: 22),
                             SizedBox(
                               width: double.infinity,
-                              height: 52,
+                              height: 54,
                               child: FilledButton(
                                 style: FilledButton.styleFrom(
                                   backgroundColor: pink,
@@ -367,9 +375,8 @@ jobs:
                                     ? const CircularProgressIndicator()
                                     : Text(
                                         registering
-                                            ? 'إنشاء حساب'
+                                            ? 'إنشاء حساب جديد'
                                             : 'تسجيل الدخول',
-                                        style: const TextStyle(fontSize: 17),
                                       ),
                               ),
                             ),
@@ -380,7 +387,7 @@ jobs:
                               child: Text(
                                 registering
                                     ? 'عندي حساب بالفعل'
-                                    : 'إنشاء حساب جديد',
+                                    : 'ما عندك حساب؟ أنشئ حساباً',
                               ),
                             ),
                           ],
@@ -388,6 +395,34 @@ jobs:
                       ),
                     ),
                   ),
+                ),
+              );
+            }
+          }
+
+          class BrandTitle extends StatelessWidget {
+            final double size;
+            const BrandTitle({super.key, this.size = 28});
+
+            @override
+            Widget build(BuildContext context) {
+              return RichText(
+                text: TextSpan(
+                  style: TextStyle(
+                    fontSize: size,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.5,
+                  ),
+                  children: const [
+                    TextSpan(
+                      text: 'TiK',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                    TextSpan(
+                      text: 'TWO',
+                      style: TextStyle(color: pink),
+                    ),
+                  ],
                 ),
               );
             }
@@ -405,17 +440,20 @@ jobs:
 
             @override
             Widget build(BuildContext context) {
-              const pages = [
-                VideoFeed(),
-                UploadScreen(),
-                ProfileScreen(),
+              final pages = [
+                const VideoFeed(),
+                const SearchScreen(),
+                const UploadScreen(),
+                const NotificationsScreen(),
+                const ProfileScreen(),
               ];
 
               return Scaffold(
                 body: IndexedStack(index: tab, children: pages),
                 bottomNavigationBar: NavigationBar(
+                  height: 68,
                   backgroundColor: const Color(0xFF100D16),
-                  indicatorColor: pink.withValues(alpha: 0.2),
+                  indicatorColor: pink.withValues(alpha: 0.18),
                   selectedIndex: tab,
                   onDestinationSelected: (index) =>
                       setState(() => tab = index),
@@ -426,9 +464,19 @@ jobs:
                       label: 'الرئيسية',
                     ),
                     NavigationDestination(
+                      icon: Icon(Icons.search),
+                      selectedIcon: Icon(Icons.search, color: pink),
+                      label: 'بحث',
+                    ),
+                    NavigationDestination(
                       icon: Icon(Icons.add_box_outlined),
                       selectedIcon: Icon(Icons.add_box, color: pink),
                       label: 'إضافة',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.notifications_none),
+                      selectedIcon: Icon(Icons.notifications, color: pink),
+                      label: 'الإشعارات',
                     ),
                     NavigationDestination(
                       icon: Icon(Icons.person_outline),
@@ -476,9 +524,9 @@ jobs:
                 }
 
                 await Future.wait(
-                  controllers.map((controller) async {
-                    await controller.initialize();
-                    await controller.setLooping(true);
+                  controllers.map((c) async {
+                    await c.initialize();
+                    await c.setLooping(true);
                   }),
                 );
 
@@ -497,12 +545,98 @@ jobs:
               }
             }
 
+            Future<void> retry() async {
+              for (final c in controllers) {
+                await c.dispose();
+              }
+              controllers.clear();
+              setState(() {
+                loading = true;
+                failed = false;
+              });
+              await prepare();
+            }
+
             @override
             void dispose() {
-              for (final controller in controllers) {
-                controller.dispose();
+              for (final c in controllers) {
+                c.dispose();
               }
               super.dispose();
+            }
+
+            Future<void> showComments(int index) async {
+              final input = TextEditingController();
+              final comments = <String>[];
+
+              await showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: panel,
+                builder: (ctx) => StatefulBuilder(
+                  builder: (ctx, update) => Padding(
+                    padding: EdgeInsets.only(
+                      left: 18,
+                      right: 18,
+                      top: 22,
+                      bottom: MediaQuery.of(ctx).viewInsets.bottom + 18,
+                    ),
+                    child: SafeArea(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'التعليقات',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          if (comments.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              child: Text('كن أول من يكتب تعليقاً'),
+                            ),
+                          ...comments.map(
+                            (comment) => ListTile(
+                              leading: const CircleAvatar(
+                                backgroundColor: purple,
+                                child: Icon(Icons.person),
+                              ),
+                              title: Text(comment),
+                            ),
+                          ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: input,
+                                  decoration: const InputDecoration(
+                                    hintText: 'اكتب تعليقاً...',
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                onPressed: () {
+                                  if (input.text.trim().isEmpty) return;
+                                  update(() {
+                                    comments.add(input.text.trim());
+                                    input.clear();
+                                  });
+                                },
+                                icon: const Icon(Icons.send, color: pink),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+              input.dispose();
             }
 
             @override
@@ -512,18 +646,10 @@ jobs:
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.play_circle_fill, size: 70, color: pink),
-                      SizedBox(height: 12),
-                      Text(
-                        'TiKTWO',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      SizedBox(height: 12),
-                      CircularProgressIndicator(color: purple),
-                      SizedBox(height: 12),
+                      BrandTitle(size: 32),
+                      SizedBox(height: 20),
+                      CircularProgressIndicator(color: pink),
+                      SizedBox(height: 14),
                       Text('جارٍ تحميل الفيديوهات...'),
                     ],
                   ),
@@ -540,17 +666,7 @@ jobs:
                       const Text('تعذر تحميل الفيديوهات'),
                       const SizedBox(height: 12),
                       FilledButton(
-                        onPressed: () {
-                          for (final c in controllers) {
-                            c.dispose();
-                          }
-                          controllers.clear();
-                          setState(() {
-                            loading = true;
-                            failed = false;
-                          });
-                          prepare();
-                        },
+                        onPressed: retry,
                         child: const Text('إعادة المحاولة'),
                       ),
                     ],
@@ -600,39 +716,20 @@ jobs:
                             colors: [
                               Color(0x55000000),
                               Colors.transparent,
-                              Color(0xBB000000),
+                              Color(0xCC000000),
                             ],
                           ),
                         ),
                       ),
                       Positioned(
-                        top: 48,
+                        top: 46,
                         left: 0,
                         right: 0,
-                        child: Center(
-                          child: RichText(
-                            text: const TextSpan(
-                              style: TextStyle(
-                                fontSize: 27,
-                                fontWeight: FontWeight.w900,
-                              ),
-                              children: [
-                                TextSpan(
-                                  text: 'TiK',
-                                  style: TextStyle(color: Colors.white),
-                                ),
-                                TextSpan(
-                                  text: 'TWO',
-                                  style: TextStyle(color: pink),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
+                        child: Center(child: const BrandTitle(size: 28)),
                       ),
                       Positioned(
-                        right: 12,
-                        bottom: 105,
+                        right: 10,
+                        bottom: 108,
                         child: Column(
                           children: [
                             const CircleAvatar(
@@ -640,7 +737,7 @@ jobs:
                               backgroundColor: purple,
                               child: Icon(Icons.person, color: Colors.white),
                             ),
-                            const SizedBox(height: 16),
+                            const SizedBox(height: 12),
                             IconButton(
                               onPressed: () => setState(() {
                                 if (!liked.add(index)) liked.remove(index);
@@ -656,37 +753,34 @@ jobs:
                               ),
                             ),
                             Text(liked.contains(index) ? 'أعجبك' : 'إعجاب'),
-                            const SizedBox(height: 14),
+                            const SizedBox(height: 10),
                             IconButton(
-                              onPressed: () => showDialog<void>(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  title: const Text('التعليقات'),
-                                  content: const Text(
-                                    'ميزة التعليقات تحتاج إلى استكمال إعدادات التطبيق.',
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(ctx),
-                                      child: const Text('إغلاق'),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                              onPressed: () => showComments(index),
                               icon: const Icon(
                                 Icons.comment_outlined,
                                 size: 30,
                               ),
                             ),
                             const Text('تعليق'),
-                            const SizedBox(height: 14),
+                            const SizedBox(height: 10),
                             IconButton(
-                              onPressed: () => ScaffoldMessenger.of(context)
-                                  .showSnackBar(
-                                const SnackBar(
-                                  content: Text('المشاركة ستتوفر لاحقاً'),
-                                ),
-                              ),
+                              onPressed: () async {
+                                try {
+                                  await SharePlus.instance.share(
+                                    ShareParams(
+                                      text: 'شاهد فيديو على TiKTWO\n${urls[index]}',
+                                    ),
+                                  );
+                                } catch (_) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('تعذرت المشاركة'),
+                                      ),
+                                    );
+                                  }
+                                }
+                              },
                               icon: const Icon(Icons.share_outlined, size: 30),
                             ),
                             const Text('مشاركة'),
@@ -695,7 +789,7 @@ jobs:
                       ),
                       Positioned(
                         left: 16,
-                        right: 85,
+                        right: 82,
                         bottom: 34,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -729,6 +823,151 @@ jobs:
             }
           }
 
+          class SearchScreen extends StatefulWidget {
+            const SearchScreen({super.key});
+
+            @override
+            State<SearchScreen> createState() => _SearchScreenState();
+          }
+
+          class _SearchScreenState extends State<SearchScreen> {
+            final search = TextEditingController();
+
+            final creators = const [
+              ('@tiktwo_1', 'فيديوهات متنوعة', Icons.movie_outlined),
+              ('@tiktwo_2', 'لحظات جميلة', Icons.favorite_outline),
+              ('@tiktwo_3', 'اكتشف الجديد', Icons.explore_outlined),
+            ];
+
+            @override
+            void dispose() {
+              search.dispose();
+              super.dispose();
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final results = creators
+                  .where((item) =>
+                      item.$1.toLowerCase().contains(search.text.toLowerCase()) ||
+                      item.$2.contains(search.text))
+                  .toList();
+
+              return SafeArea(
+                child: ListView(
+                  padding: const EdgeInsets.all(20),
+                  children: [
+                    const BrandTitle(size: 30),
+                    const SizedBox(height: 20),
+                    const Text(
+                      'اكتشف TiKTWO',
+                      style: TextStyle(
+                        fontSize: 25,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: search,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        hintText: 'ابحث عن اسم أو محتوى...',
+                        prefixIcon: Icon(Icons.search, color: pink),
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    const Text(
+                      'حسابات مقترحة',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    for (final item in results)
+                      Card(
+                        color: panel,
+                        child: ListTile(
+                          leading: const CircleAvatar(
+                            backgroundColor: purple,
+                            child: Icon(Icons.person, color: Colors.white),
+                          ),
+                          title: Text(item.$1),
+                          subtitle: Text(item.$2),
+                          trailing: const Icon(
+                            Icons.play_circle_outline,
+                            color: pink,
+                          ),
+                        ),
+                      ),
+                    if (results.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: Text('ما لقينا نتائج مطابقة'),
+                      ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'هذه نتائج تجريبية. البحث عن جميع المستخدمين يحتاج ربط قاعدة البيانات.',
+                      style: TextStyle(color: Colors.white60, fontSize: 12),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+
+          class NotificationsScreen extends StatelessWidget {
+            const NotificationsScreen({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return SafeArea(
+                child: ListView(
+                  padding: const EdgeInsets.all(20),
+                  children: [
+                    const BrandTitle(size: 30),
+                    const SizedBox(height: 22),
+                    const Text(
+                      'الإشعارات',
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    const Card(
+                      color: panel,
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: pink,
+                          child: Icon(Icons.favorite, color: Colors.white),
+                        ),
+                        title: Text('مرحباً بك في TiKTWO'),
+                        subtitle: Text('ابدأ باكتشاف الفيديوهات الجديدة'),
+                      ),
+                    ),
+                    const Card(
+                      color: panel,
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: purple,
+                          child: Icon(Icons.people, color: Colors.white),
+                        ),
+                        title: Text('مجتمع TiKTWO'),
+                        subtitle: Text('أنشئ حسابك وشارك لحظاتك'),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'هذه إشعارات ترحيبية تجريبية. إشعارات الإعجابات والمتابعات الحقيقية تحتاج إلى ربط بالخادم.',
+                      style: TextStyle(color: Colors.white60, fontSize: 12),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+
           class UploadScreen extends StatefulWidget {
             const UploadScreen({super.key});
 
@@ -753,7 +992,7 @@ jobs:
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text(
-                        'تم اختيار الفيديو. نشره للآخرين يحتاج إلى خدمة تخزين.',
+                        'تم اختيار الفيديو. لم يُنشر للآخرين بعد.',
                       ),
                     ),
                   );
@@ -781,17 +1020,17 @@ jobs:
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Container(
-                          width: 110,
-                          height: 110,
+                          width: 112,
+                          height: 112,
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(28),
+                            borderRadius: BorderRadius.circular(30),
                             gradient: const LinearGradient(
                               colors: [pink, purple],
                             ),
                           ),
                           child: const Icon(
                             Icons.video_call_outlined,
-                            size: 62,
+                            size: 64,
                           ),
                         ),
                         const SizedBox(height: 24),
@@ -802,12 +1041,12 @@ jobs:
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 10),
                         const Text('اختر فيديو من معرض هاتفك'),
-                        const SizedBox(height: 22),
+                        const SizedBox(height: 24),
                         SizedBox(
                           width: double.infinity,
-                          height: 52,
+                          height: 54,
                           child: FilledButton.icon(
                             style: FilledButton.styleFrom(
                               backgroundColor: pink,
@@ -833,7 +1072,7 @@ jobs:
                           ),
                           const SizedBox(height: 8),
                           const Text(
-                            'الفيديو موجود على جهازك ولم يُنشر للآخرين.',
+                            'تم اختيار الملف على جهازك فقط.',
                             textAlign: TextAlign.center,
                           ),
                         ],
@@ -856,55 +1095,77 @@ jobs:
                   'مستخدم TiKTWO';
 
               return SafeArea(
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          width: 100,
-                          height: 100,
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: LinearGradient(
-                              colors: [pink, purple],
-                            ),
-                          ),
-                          child: const Icon(
-                            Icons.person,
-                            size: 60,
-                            color: Colors.white,
+                child: ListView(
+                  padding: const EdgeInsets.all(22),
+                  children: [
+                    const BrandTitle(size: 30),
+                    const SizedBox(height: 28),
+                    Center(
+                      child: Container(
+                        width: 106,
+                        height: 106,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                            colors: [pink, purple],
                           ),
                         ),
-                        const SizedBox(height: 18),
-                        Text(
-                          displayName,
-                          style: const TextStyle(
-                            fontSize: 25,
-                            fontWeight: FontWeight.bold,
-                          ),
+                        child: const Icon(
+                          Icons.person,
+                          size: 64,
+                          color: Colors.white,
                         ),
-                        const SizedBox(height: 8),
-                        Text(user?.email ?? ''),
-                        const SizedBox(height: 28),
-                        const Text(
-                          'أهلاً بك في مجتمع TiKTWO',
-                          style: TextStyle(color: purple, fontSize: 17),
-                        ),
-                        const SizedBox(height: 28),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: () =>
-                                FirebaseAuth.instance.signOut(),
-                            icon: const Icon(Icons.logout, color: pink),
-                            label: const Text('تسجيل الخروج'),
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 16),
+                    Center(
+                      child: Text(
+                        displayName,
+                        style: const TextStyle(
+                          fontSize: 25,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Center(
+                      child: Text(
+                        user?.email ?? '',
+                        style: const TextStyle(color: Colors.white60),
+                      ),
+                    ),
+                    const SizedBox(height: 26),
+                    Card(
+                      color: panel,
+                      child: const Column(
+                        children: [
+                          ListTile(
+                            leading: Icon(Icons.video_library, color: pink),
+                            title: Text('فيديوهاتي'),
+                            subtitle: Text('ستظهر فيديوهاتك المنشورة هنا'),
+                          ),
+                          Divider(height: 1),
+                          ListTile(
+                            leading: Icon(Icons.favorite_outline, color: purple),
+                            title: Text('الفيديوهات التي أعجبتني'),
+                            subtitle: Text('اكتشف محتواك المفضل'),
+                          ),
+                          Divider(height: 1),
+                          ListTile(
+                            leading: Icon(Icons.shield_outlined, color: pink),
+                            title: Text('حساب TiKTWO'),
+                            subtitle: Text('إدارة حسابك وتسجيل الدخول'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    OutlinedButton.icon(
+                      onPressed: () => FirebaseAuth.instance.signOut(),
+                      icon: const Icon(Icons.logout, color: pink),
+                      label: const Text('تسجيل الخروج'),
+                    ),
+                  ],
                 ),
               );
             }
