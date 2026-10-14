@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "922714161742",
+    "project_id": "tiktwo-2c9cf",
+    "storage_bucket": "tiktwo-2c9cf.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:922714161742:android:9c1e7a394bb4870cc4b91f",
+        "android_client_info": {
+          "package_name": "com.tiktwo.tiktwo"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "922714161742-hom2rre1uras5d6ejaotfn6amd7uhntj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAYUhnEJ15uNZO6iDu9vr5Yh28YLA9FfSA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "922714161742-hom2rre1uras5d6ejaotfn6amd7uhntj.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
